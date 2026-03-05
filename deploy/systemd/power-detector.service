@@ -1,0 +1,17 @@
+[Unit]
+Description=Power Detector Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/power-detector
+Environment=POWER_DETECTOR_SMTP_PASSWORD=replace_me
+ExecStart=/opt/power-detector/.venv/bin/python /opt/power-detector/power_detector.py --config /opt/power-detector/config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

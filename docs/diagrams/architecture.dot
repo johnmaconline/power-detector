@@ -1,0 +1,30 @@
+digraph Architecture {
+  rankdir=LR;
+  splines=true;
+  fontname="Helvetica";
+  node [shape=box, style="rounded,filled", fillcolor="#f7f7f7", color="#444444", fontname="Helvetica"];
+  edge [color="#555555", penwidth=1.4, fontname="Helvetica"];
+
+  grid [label="Utility Power Grid", fillcolor="#fde68a"];
+  nonups [label="Non-UPS Outlet", fillcolor="#fee2e2"];
+  sentinel [label="Power Sentinel\n(Shelly Plug/Relay)", fillcolor="#fecaca"];
+
+  ups [label="UPS", fillcolor="#bfdbfe"];
+  wifi [label="Wi-Fi Router/AP", fillcolor="#dbeafe"];
+  host [label="Monitor Host\n(Python Service)", fillcolor="#d1fae5"];
+  smtp [label="SMTP Provider", fillcolor="#e5e7eb"];
+  carrier [label="Carrier Email-to-SMS Gateway", fillcolor="#e5e7eb"];
+  phone [label="Recipient Phone", fillcolor="#dcfce7"];
+
+  grid -> nonups [label="mains power"];
+  nonups -> sentinel [label="device power"];
+
+  grid -> ups [label="mains power"];
+  ups -> wifi [label="backup power"];
+  ups -> host [label="backup power"];
+
+  host -> sentinel [label="LAN probe (HTTP ping)", dir=both];
+  host -> smtp [label="send alert email"];
+  smtp -> carrier [label="email delivery"];
+  carrier -> phone [label="SMS message"];
+}

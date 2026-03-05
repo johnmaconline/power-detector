@@ -1,0 +1,54 @@
+poll_interval_seconds: 10
+power_loss_threshold_seconds: 60
+power_restore_stability_seconds: 10
+wan_loss_threshold_seconds: 90
+wan_restore_stability_seconds: 20
+event_cooldown_seconds: 180
+outage_cadence_mode: single_recovery
+outage_reminder_interval_seconds: 1800
+
+sentinel:
+  type: shelly_http
+  host: 192.168.1.50
+  timeout_seconds: 2
+
+wan_probe:
+  dns_targets:
+    - 1.1.1.1
+    - 8.8.8.8
+  http_targets:
+    - https://1.1.1.1/cdn-cgi/trace
+
+notification:
+  enabled: true
+  transport: smtp_email_to_sms
+  smtp:
+    host: smtp.gmail.com
+    port: 587
+    use_starttls: true
+    username: your_email@example.com
+    password_env_var: POWER_DETECTOR_SMTP_PASSWORD
+    from_address: your_email@example.com
+    max_retries: 3
+    retry_backoff_seconds: [2, 5, 10]
+    timeout_seconds: 10
+  recipients:
+    - phone: '5551234567'
+      carrier_code: verizon
+    - phone: '5559876543'
+      carrier_code: custom
+      custom_gateway_domain: sms.examplecarrier.com
+  events_enabled:
+    - power_loss
+    - power_restore
+    - wan_loss
+    - wan_restore
+
+logging:
+  file_path: ./power-detector.log
+  max_mb: 10
+  backup_count: 3
+
+mock:
+  sentinel_sequence: ok:120,fail:120,ok:120
+  wan_sequence: ok:300,fail:180,ok:300

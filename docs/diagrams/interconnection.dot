@@ -1,0 +1,44 @@
+digraph Interconnection {
+  rankdir=TB;
+  splines=ortho;
+  fontname="Helvetica";
+  node [shape=box, style="rounded,filled", fillcolor="#f8fafc", color="#334155", fontname="Helvetica"];
+  edge [color="#475569", penwidth=1.3, fontname="Helvetica"];
+
+  subgraph cluster_power {
+    label="Power Domain";
+    color="#cbd5e1";
+    grid [label="Utility Grid", fillcolor="#fde68a"];
+    outlet [label="Sentinel Outlet\n(non-UPS)", fillcolor="#fee2e2"];
+    sentinel [label="Sentinel IoT Device", fillcolor="#fecaca"];
+    ups [label="UPS", fillcolor="#bfdbfe"];
+    grid -> outlet;
+    outlet -> sentinel;
+    grid -> ups;
+  }
+
+  subgraph cluster_network {
+    label="Network/Compute Domain";
+    color="#cbd5e1";
+    router [label="Router/AP (UPS-backed)", fillcolor="#dbeafe"];
+    monitor [label="Power Detector Service", fillcolor="#d1fae5"];
+    logger [label="Local Logs", fillcolor="#e2e8f0"];
+    router -> monitor [dir=both, label="LAN"];
+    monitor -> logger [label="events"];
+  }
+
+  subgraph cluster_notify {
+    label="Notification Domain";
+    color="#cbd5e1";
+    smtp [label="SMTP Server", fillcolor="#e5e7eb"];
+    gateway [label="Carrier Email-to-SMS Gateway", fillcolor="#e5e7eb"];
+    phone [label="Phone", fillcolor="#dcfce7"];
+    monitor -> smtp [label="alert email"];
+    smtp -> gateway [label="deliver"];
+    gateway -> phone [label="SMS"];
+  }
+
+  ups -> router [label="power"];
+  ups -> monitor [label="power"];
+  monitor -> sentinel [dir=both, label="probe"];
+}
