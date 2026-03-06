@@ -31,7 +31,22 @@ wan_probe:
 notification:
   enabled: true
   startup_message_enabled: true
-  transport: smtp_email_to_sms
+  transport: ntfy_push
+  ntfy:
+    server_url: https://ntfy.sh
+    topic: your-unique-power-detector-topic
+    token_env_var: ''
+    default_priority: default
+    default_tags: [zap, house]
+    timeout_seconds: 10
+  twilio:
+    account_sid: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    auth_token_env_var: POWER_DETECTOR_TWILIO_AUTH_TOKEN
+    from_number: '+15555550123'
+    messaging_service_sid: ''
+    max_retries: 3
+    retry_backoff_seconds: [2, 5, 10]
+    timeout_seconds: 10
   smtp:
     host: smtp.gmail.com
     port: 587

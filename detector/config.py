@@ -51,6 +51,26 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         'enabled': True,
         'startup_message_enabled': True,
         'transport': 'smtp_email_to_sms',
+        'ntfy': {
+            'server_url': 'https://ntfy.sh',
+            'topic': '',
+            'token_env_var': '',
+            'default_priority': 'default',
+            'default_tags': [
+                'zap',
+                'house',
+            ],
+            'timeout_seconds': 10,
+        },
+        'twilio': {
+            'account_sid': '',
+            'auth_token_env_var': 'POWER_DETECTOR_TWILIO_AUTH_TOKEN',
+            'from_number': '',
+            'messaging_service_sid': '',
+            'max_retries': 3,
+            'retry_backoff_seconds': [2, 5, 10],
+            'timeout_seconds': 10,
+        },
         'smtp': {
             'host': '',
             'port': 587,
@@ -144,14 +164,23 @@ def _normalize_phone(phone_raw: str) -> str:
     return digits
 
 
+def resolve_recipient_phone(recipient: Dict[str, Any]) -> str:
+    '''Map recipient phone input to Twilio-compatible E.164 for US numbers.'''
+    digits = _normalize_phone(recipient.get('phone', ''))
+    return f'+1{digits}'
+
+
 def _normalize_carrier_code(carrier_raw: str) -> str:
     '''Normalize carrier input strings to a built-in canonical code.'''
     cleaned = re.sub(r'[^a-z0-9]', '', str(carrier_raw).strip().lower())
     return _CARRIER_CODE_ALIASES.get(cleaned, '')
 
 
-def _validate_recipients(recipients: List[Dict[str, Any]]) -> None:
-    '''Validate recipient mapping records for phone+carrier configuration.'''
+def _validate_recipients(recipients: List[Dict[str, Any]], transport: str) -> None:
+    '''Validate recipient records for configured notification transport.'''
+    if transport == 'ntfy_push':
+        return
+
     if not isinstance(recipients, list) or len(recipients) == 0:
         raise ConfigError('notification.recipients must contain at least one recipient.')
 
@@ -162,6 +191,9 @@ def _validate_recipients(recipients: List[Dict[str, Any]]) -> None:
         if 'phone' not in recipient:
             raise ConfigError(f'notification.recipients[{idx}].phone is required.')
         _normalize_phone(recipient['phone'])
+
+        if transport == 'twilio_sms':
+            continue
 
         custom_domain = str(recipient.get('custom_gateway_domain', '')).strip()
         carrier_code = _normalize_carrier_code(recipient.get('carrier_code', ''))
@@ -219,25 +251,58 @@ def _validate(config: Dict[str, Any]) -> Dict[str, Any]:
         raise ConfigError('At least one WAN target is required (dns_targets or http_targets).')
 
     notification = config.get('notification', {})
-    if notification.get('transport') != 'smtp_email_to_sms':
-        raise ConfigError('notification.transport must be smtp_email_to_sms for v1.')
+    transport = notification.get('transport')
+    if transport not in ('smtp_email_to_sms', 'twilio_sms', 'ntfy_push'):
+        raise ConfigError(
+            'notification.transport must be smtp_email_to_sms, twilio_sms, or ntfy_push.')
 
-    _validate_recipients(notification.get('recipients', []))
+    _validate_recipients(notification.get('recipients', []), transport)
 
-    smtp_cfg = notification.get('smtp', {})
-    for key in ('host', 'username', 'password_env_var', 'from_address'):
-        if not str(smtp_cfg.get(key, '')).strip():
-            raise ConfigError(f'notification.smtp.{key} is required.')
+    if transport == 'smtp_email_to_sms':
+        smtp_cfg = notification.get('smtp', {})
+        for key in ('host', 'username', 'password_env_var', 'from_address'):
+            if not str(smtp_cfg.get(key, '')).strip():
+                raise ConfigError(f'notification.smtp.{key} is required.')
 
-    _require_int(smtp_cfg.get('port', 0), 'notification.smtp.port', 1)
-    _require_int(smtp_cfg.get('max_retries', 0), 'notification.smtp.max_retries', 1)
-    _require_int(smtp_cfg.get('timeout_seconds', 0), 'notification.smtp.timeout_seconds', 1)
+        _require_int(smtp_cfg.get('port', 0), 'notification.smtp.port', 1)
+        _require_int(smtp_cfg.get('max_retries', 0), 'notification.smtp.max_retries', 1)
+        _require_int(smtp_cfg.get('timeout_seconds', 0), 'notification.smtp.timeout_seconds', 1)
 
-    retries = smtp_cfg.get('retry_backoff_seconds', [])
-    if not isinstance(retries, list) or len(retries) == 0:
-        raise ConfigError('notification.smtp.retry_backoff_seconds must be a non-empty list.')
-    for index, backoff in enumerate(retries):
-        _require_int(backoff, f'notification.smtp.retry_backoff_seconds[{index}]', 1)
+        retries = smtp_cfg.get('retry_backoff_seconds', [])
+        if not isinstance(retries, list) or len(retries) == 0:
+            raise ConfigError('notification.smtp.retry_backoff_seconds must be a non-empty list.')
+        for index, backoff in enumerate(retries):
+            _require_int(backoff, f'notification.smtp.retry_backoff_seconds[{index}]', 1)
+    elif transport == 'twilio_sms':
+        twilio_cfg = notification.get('twilio', {})
+        for key in ('account_sid', 'auth_token_env_var'):
+            if not str(twilio_cfg.get(key, '')).strip():
+                raise ConfigError(f'notification.twilio.{key} is required.')
+
+        from_number = str(twilio_cfg.get('from_number', '')).strip()
+        service_sid = str(twilio_cfg.get('messaging_service_sid', '')).strip()
+        if not from_number and not service_sid:
+            raise ConfigError(
+                'notification.twilio.from_number or '
+                'notification.twilio.messaging_service_sid is required.')
+
+        _require_int(twilio_cfg.get('max_retries', 0), 'notification.twilio.max_retries', 1)
+        _require_int(twilio_cfg.get('timeout_seconds', 0), 'notification.twilio.timeout_seconds', 1)
+        retries = twilio_cfg.get('retry_backoff_seconds', [])
+        if not isinstance(retries, list) or len(retries) == 0:
+            raise ConfigError('notification.twilio.retry_backoff_seconds must be a non-empty list.')
+        for index, backoff in enumerate(retries):
+            _require_int(backoff, f'notification.twilio.retry_backoff_seconds[{index}]', 1)
+    else:
+        ntfy_cfg = notification.get('ntfy', {})
+        for key in ('server_url', 'topic'):
+            if not str(ntfy_cfg.get(key, '')).strip():
+                raise ConfigError(f'notification.ntfy.{key} is required.')
+
+        _require_int(ntfy_cfg.get('timeout_seconds', 0), 'notification.ntfy.timeout_seconds', 1)
+        default_tags = ntfy_cfg.get('default_tags', [])
+        if not isinstance(default_tags, list):
+            raise ConfigError('notification.ntfy.default_tags must be a list.')
 
     events_enabled = notification.get('events_enabled', [])
     valid_events = {

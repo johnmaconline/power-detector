@@ -10,6 +10,8 @@ Standalone Python service that detects home power loss from a non-UPS IoT sentin
 - Separate WAN loss/restore alerts (defaults `90s`/`20s`)
 - Deduplication cooldown and optional periodic outage reminders
 - Phone + carrier recipient mapping with built-in US carrier domains and custom override
+- Free `ntfy` push notification transport
+- Twilio SMS transport support for reliable direct text delivery
 - macOS mock testing path and Raspberry Pi production deployment path
 
 ## Files
@@ -53,6 +55,69 @@ To send startup monitoring SMS on normal runs, ensure:
 - `notification.enabled: true`
 - `notification.startup_message_enabled: true`
 - `monitoring_started` exists in `notification.events_enabled`
+
+## Twilio SMS Setup (Recommended)
+
+Carrier email-to-SMS is increasingly unreliable. Use Twilio for direct SMS:
+
+1. In `config.yaml`:
+```yaml
+notification:
+  transport: twilio_sms
+  twilio:
+    account_sid: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    auth_token_env_var: POWER_DETECTOR_TWILIO_AUTH_TOKEN
+    from_number: '+15555550123'
+    messaging_service_sid: ''
+```
+
+2. In `.env`:
+```bash
+POWER_DETECTOR_TWILIO_AUTH_TOKEN='your_twilio_auth_token'
+```
+
+3. Set recipients (phone only is enough for Twilio mode):
+```yaml
+notification:
+  recipients:
+    - phone: '6108238852'
+```
+
+4. Test:
+```bash
+python power_detector.py --config config.yaml --test-notify
+```
+
+Notes:
+- Use either `from_number` or `messaging_service_sid`.
+- In Twilio mode, `carrier_code` is ignored.
+
+## ntfy Push Setup (Free)
+
+`ntfy` is the zero-cost push option. It sends app notifications to a topic that you subscribe to from your phone.
+
+1. Install the `ntfy` app on your phone.
+2. In `config.yaml`:
+```yaml
+notification:
+  transport: ntfy_push
+  ntfy:
+    server_url: https://ntfy.sh
+    topic: your-unique-power-detector-topic
+    token_env_var: ''
+    default_priority: default
+    default_tags: [zap, house]
+```
+3. In the `ntfy` phone app, subscribe to the same topic.
+4. Test:
+```bash
+python power_detector.py --config config.yaml --test-notify
+```
+
+Notes:
+- Pick a topic name that is hard to guess.
+- Public `ntfy.sh` works without secrets, but topic privacy depends on topic uniqueness.
+- Self-hosting `ntfy` is possible later if you want stronger control.
 
 ## Discover Devices (LAN)
 
