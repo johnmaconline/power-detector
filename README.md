@@ -4,6 +4,7 @@ Standalone Python service that detects home power loss from a non-UPS IoT sentin
 
 ## Features
 
+- Startup SMS when monitoring begins and power is confirmed
 - Power loss alert after configurable continuous failure duration (default `60s`)
 - Power restore alert after configurable stability window (default `10s`)
 - Separate WAN loss/restore alerts (defaults `90s`/`20s`)
@@ -32,16 +33,61 @@ cp config.example.yaml config.yaml
 python power_detector.py --config config.yaml --mock-sentinel --mock-wan --dry-run-notify
 ```
 
+Note:
+- The app auto-loads secrets from `.env` (current working directory or config file directory).
+- Existing shell env vars take precedence over `.env` values.
+
 ## Real LAN Test (macOS)
 
-1. Set `sentinel.host` to your Shelly IP.
-2. Keep `--dry-run-notify` for no-SMTP testing or set SMTP env var for real sends.
+1. Prefer setting `sentinel.device_id` and `discovery.targets` so DHCP IP changes are handled automatically.
+2. Optional fallback: set `sentinel.host` to a stable hostname (for example `shellyplug-sensor.local`).
+3. Keep `--dry-run-notify` for no-SMTP testing or set SMTP env var for real sends.
 
 ```bash
 export POWER_DETECTOR_SMTP_PASSWORD='your_password'
 python power_detector.py --config config.yaml --oneshot
 python power_detector.py --config config.yaml --test-notify
 ```
+
+To send startup monitoring SMS on normal runs, ensure:
+- `notification.enabled: true`
+- `notification.startup_message_enabled: true`
+- `monitoring_started` exists in `notification.events_enabled`
+
+## Discover Devices (LAN)
+
+Use the discovery script to list reachable devices, hostnames, and Shelly matches:
+
+```bash
+source .venv/bin/activate
+python scripts/find_shelly.py --target 192.168.1.0/24
+```
+
+This helps you capture either:
+- `sentinel.device_id` for DHCP-resilient monitoring (recommended)
+- or a stable hostname for `sentinel.host`
+
+You can scan wider ranges:
+
+```bash
+# Multiple subnets
+python scripts/find_shelly.py --target 192.168.1.0/24 --target 192.168.2.0/24
+
+# Explicit IP range
+python scripts/find_shelly.py --target 192.168.0.1-192.168.3.254
+
+# Large CIDR with raised safety cap
+python scripts/find_shelly.py --target 192.168.0.0/16 --max-hosts 70000
+```
+
+Discovery output includes:
+- IP address
+- Hostname (reverse DNS)
+- MAC address (from ARP cache, when available)
+- Ping latency
+- Open TCP ports from configured probe list
+- Device type (`shelly` or `unknown`)
+- Shelly details (model, generation, name, device id, endpoint, firmware)
 
 ## Raspberry Pi Deployment
 
@@ -71,6 +117,11 @@ sudo systemctl status power-detector
 - `event_cooldown_seconds: 180`
 - `outage_cadence_mode: single_recovery`
 - `outage_reminder_interval_seconds: 1800`
+- `notification.startup_message_enabled: true`
+
+Production note:
+- Preferred: configure `sentinel.device_id` + `discovery.targets`.
+- Fallback: use hostname in `sentinel.host` instead of raw IP.
 
 ## Tests
 

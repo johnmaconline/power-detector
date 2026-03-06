@@ -9,8 +9,17 @@ outage_reminder_interval_seconds: 1800
 
 sentinel:
   type: shelly_http
-  host: 192.168.1.50
+  host: ''
+  device_id: 34987a123456
   timeout_seconds: 2
+
+discovery:
+  targets:
+    - 192.168.1.0/24
+  workers: 128
+  http_timeout_seconds: 0.6
+  max_hosts: 65536
+  refresh_seconds: 300
 
 wan_probe:
   dns_targets:
@@ -21,6 +30,7 @@ wan_probe:
 
 notification:
   enabled: true
+  startup_message_enabled: true
   transport: smtp_email_to_sms
   smtp:
     host: smtp.gmail.com
@@ -39,6 +49,7 @@ notification:
       carrier_code: custom
       custom_gateway_domain: sms.examplecarrier.com
   events_enabled:
+    - monitoring_started
     - power_loss
     - power_restore
     - wan_loss

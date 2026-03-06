@@ -12,14 +12,15 @@ import argparse
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+from pathlib import Path
 import sys
 import time
 from datetime import date
 
-from detector.config import ConfigError, load_config
+from detector.config import ConfigError, load_config, load_env_file
 from detector.models import AlertEvent, EventKind
 from detector.notifier import Notifier
-from detector.probes import MockSequenceProbe, ShellyHttpProbe, WanProbe
+from detector.probes import DeviceIdShellyProbe, MockSequenceProbe, ShellyHttpProbe, WanProbe
 from detector.state_machine import DetectorStateMachine
 
 
@@ -112,6 +113,11 @@ def _make_power_probe(config, args):
         return MockSequenceProbe(sequence)
 
     sentinel_cfg = config['sentinel']
+    device_id = str(sentinel_cfg.get('device_id', '')).strip()
+    if device_id:
+        log.info(f'Using device_id-based sentinel resolution for id={device_id}.')
+        return DeviceIdShellyProbe(config, log)
+
     return ShellyHttpProbe(
         host=sentinel_cfg['host'],
         timeout_seconds=sentinel_cfg.get('timeout_seconds', 2),
@@ -154,6 +160,33 @@ def _run_test_notification(config, args):
     return 1
 
 
+def _auto_load_env(args):
+    '''Load dotenv secrets from known local paths without overriding existing env vars.'''
+    loaded_total = 0
+    config_dir = str(Path(args.config).resolve().parent)
+    candidates = [
+        os.environ.get('POWER_DETECTOR_ENV_FILE', '').strip(),
+        os.path.join(os.getcwd(), '.env'),
+        os.path.join(config_dir, '.env'),
+    ]
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate_path = os.path.abspath(candidate)
+        if candidate_path in seen:
+            continue
+        seen.add(candidate_path)
+        loaded = load_env_file(candidate_path, override=False)
+        if loaded > 0:
+            log.info(f'Loaded {loaded} environment variable(s) from {candidate_path}.')
+            loaded_total += loaded
+
+    if loaded_total == 0:
+        log.debug('No .env file variables loaded.')
+
+
 def _loop(config, args):
     '''Execute the detector probe/transition/notify loop.'''
     state_machine = DetectorStateMachine(config)
@@ -162,6 +195,11 @@ def _loop(config, args):
     wan_probe = _make_wan_probe(config, args)
 
     poll_interval = config['poll_interval_seconds']
+    startup_sent = False
+    startup_enabled = bool(config.get('notification', {}).get('startup_message_enabled', True))
+    sentinel_cfg = config.get('sentinel', {})
+    sentinel_identity = str(sentinel_cfg.get('device_id', '')).strip() or str(
+        sentinel_cfg.get('host', '')).strip()
 
     while True:
         now_ts = time.monotonic()
@@ -175,6 +213,23 @@ def _loop(config, args):
         log.debug(
             f'Probe wan_ok={wan_result.ok} reason={wan_result.reason} '
             f'latency_ms={wan_result.latency_ms}')
+
+        if not args.oneshot and not startup_sent and startup_enabled and power_result.ok:
+            startup_event = AlertEvent(
+                kind=EventKind.MONITORING_STARTED,
+                started_at=now_ts,
+                duration_seconds=0,
+                details=(
+                    f'Power detected. Monitoring started for sentinel={sentinel_identity}. '
+                    f'probe={power_result.reason}'
+                ),
+            )
+            sent = notifier.notify(startup_event, dry_run=args.dry_run_notify)
+            if sent:
+                startup_sent = True
+                log.info('Startup monitoring notification sent.')
+            else:
+                log.error('Startup monitoring notification failed; will retry next cycle.')
 
         events = state_machine.evaluate(now_ts, power_result.ok, wan_result.ok)
 
@@ -279,6 +334,7 @@ def main():
         Exit status integer.
     '''
     args = handle_args()
+    _auto_load_env(args)
 
     try:
         config = load_config(args.config)

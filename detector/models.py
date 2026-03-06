@@ -15,6 +15,7 @@ from typing import Dict
 
 class EventKind(str, Enum):
     '''Event kinds emitted by the detector state machine.'''
+    MONITORING_STARTED = 'monitoring_started'
     POWER_LOSS = 'power_loss'
     POWER_RESTORE = 'power_restore'
     WAN_LOSS = 'wan_loss'

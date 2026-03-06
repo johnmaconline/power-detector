@@ -35,6 +35,16 @@ def test_resolve_recipient_builtin_carrier():
     assert addr == '5551234567@vtext.com'
 
 
+def test_resolve_recipient_att_alias():
+    addr = resolve_recipient_address({'phone': '(555) 123-4567', 'carrier_code': 'at&t'})
+    assert addr == '5551234567@txt.att.net'
+
+
+def test_resolve_recipient_tmobile_alias():
+    addr = resolve_recipient_address({'phone': '(555) 123-4567', 'carrier_code': 't-mobile'})
+    assert addr == '5551234567@tmomail.net'
+
+
 def test_resolve_recipient_custom_domain():
     addr = resolve_recipient_address(
         {

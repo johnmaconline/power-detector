@@ -28,7 +28,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'sentinel': {
         'type': 'shelly_http',
         'host': '',
+        'device_id': '',
         'timeout_seconds': 2,
+    },
+    'discovery': {
+        'targets': [],
+        'workers': 128,
+        'http_timeout_seconds': 0.6,
+        'max_hosts': 65536,
+        'refresh_seconds': 300,
     },
     'wan_probe': {
         'dns_targets': [
@@ -41,6 +49,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     'notification': {
         'enabled': True,
+        'startup_message_enabled': True,
         'transport': 'smtp_email_to_sms',
         'smtp': {
             'host': '',
@@ -55,6 +64,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         },
         'recipients': [],
         'events_enabled': [
+            'monitoring_started',
             'power_loss',
             'power_restore',
             'wan_loss',
@@ -78,6 +88,14 @@ BUILTIN_CARRIER_GATEWAYS: Dict[str, str] = {
     'att': 'txt.att.net',
     'tmobile': 'tmomail.net',
     'uscellular': 'email.uscc.net',
+}
+
+_CARRIER_CODE_ALIASES: Dict[str, str] = {
+    'atandt': 'att',
+    'att': 'att',
+    'tmobile': 'tmobile',
+    'uscellular': 'uscellular',
+    'verizon': 'verizon',
 }
 
 
@@ -106,6 +124,16 @@ def _require_int(value: Any, key: str, minimum: int = 0) -> int:
     return value
 
 
+def _require_float(value: Any, key: str, minimum: float = 0.0) -> float:
+    '''Validate float configuration values.'''
+    if not isinstance(value, (int, float)):
+        raise ConfigError(f'Config key {key} must be a number.')
+    numeric = float(value)
+    if numeric < minimum:
+        raise ConfigError(f'Config key {key} must be >= {minimum}.')
+    return numeric
+
+
 def _normalize_phone(phone_raw: str) -> str:
     '''Normalize a US phone number to 10 digits for gateway delivery.'''
     digits = re.sub(r'\D', '', str(phone_raw))
@@ -114,6 +142,12 @@ def _normalize_phone(phone_raw: str) -> str:
     if len(digits) != 10:
         raise ConfigError(f'Invalid phone number for recipient: {phone_raw}')
     return digits
+
+
+def _normalize_carrier_code(carrier_raw: str) -> str:
+    '''Normalize carrier input strings to a built-in canonical code.'''
+    cleaned = re.sub(r'[^a-z0-9]', '', str(carrier_raw).strip().lower())
+    return _CARRIER_CODE_ALIASES.get(cleaned, '')
 
 
 def _validate_recipients(recipients: List[Dict[str, Any]]) -> None:
@@ -130,7 +164,7 @@ def _validate_recipients(recipients: List[Dict[str, Any]]) -> None:
         _normalize_phone(recipient['phone'])
 
         custom_domain = str(recipient.get('custom_gateway_domain', '')).strip()
-        carrier_code = str(recipient.get('carrier_code', '')).strip().lower()
+        carrier_code = _normalize_carrier_code(recipient.get('carrier_code', ''))
 
         if custom_domain:
             continue
@@ -141,7 +175,8 @@ def _validate_recipients(recipients: List[Dict[str, Any]]) -> None:
 
         if carrier_code not in BUILTIN_CARRIER_GATEWAYS:
             raise ConfigError(
-                f'Unknown carrier_code {carrier_code} at notification.recipients[{idx}].')
+                f'Unknown carrier_code {recipient.get("carrier_code", "")} '
+                f'at notification.recipients[{idx}].')
 
 
 def _validate(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -160,9 +195,24 @@ def _validate(config: Dict[str, Any]) -> Dict[str, Any]:
     sentinel = config.get('sentinel', {})
     if sentinel.get('type') != 'shelly_http':
         raise ConfigError('sentinel.type must be shelly_http for v1.')
-    if not str(sentinel.get('host', '')).strip():
-        raise ConfigError('sentinel.host is required.')
+    sentinel_host = str(sentinel.get('host', '')).strip()
+    sentinel_device_id = str(sentinel.get('device_id', '')).strip()
+    if not sentinel_host and not sentinel_device_id:
+        raise ConfigError('sentinel.host or sentinel.device_id is required.')
     _require_int(sentinel.get('timeout_seconds', 0), 'sentinel.timeout_seconds', 1)
+
+    discovery = config.get('discovery', {})
+    _require_int(discovery.get('workers', 0), 'discovery.workers', 1)
+    _require_float(discovery.get('http_timeout_seconds', 0), 'discovery.http_timeout_seconds', 0.1)
+    _require_int(discovery.get('max_hosts', 0), 'discovery.max_hosts', 1)
+    _require_int(discovery.get('refresh_seconds', 0), 'discovery.refresh_seconds', 1)
+
+    targets = discovery.get('targets', [])
+    if not isinstance(targets, list):
+        raise ConfigError('discovery.targets must be a list.')
+    if sentinel_device_id and not sentinel_host and len(targets) == 0:
+        raise ConfigError(
+            'discovery.targets is required when using sentinel.device_id without sentinel.host.')
 
     wan_probe = config.get('wan_probe', {})
     if not wan_probe.get('dns_targets') and not wan_probe.get('http_targets'):
@@ -190,7 +240,13 @@ def _validate(config: Dict[str, Any]) -> Dict[str, Any]:
         _require_int(backoff, f'notification.smtp.retry_backoff_seconds[{index}]', 1)
 
     events_enabled = notification.get('events_enabled', [])
-    valid_events = {'power_loss', 'power_restore', 'wan_loss', 'wan_restore'}
+    valid_events = {
+        'monitoring_started',
+        'power_loss',
+        'power_restore',
+        'wan_loss',
+        'wan_restore',
+    }
     if not set(events_enabled).issubset(valid_events):
         raise ConfigError('notification.events_enabled contains invalid event kinds.')
 
@@ -212,6 +268,49 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return _validate(merged)
 
 
+def load_env_file(env_path: str, override: bool = False) -> int:
+    '''Load KEY=VALUE pairs from a dotenv-style file into os.environ.
+
+    Returns:
+        Count of variables loaded into the environment.
+    '''
+    if not env_path or not os.path.exists(env_path):
+        return 0
+
+    loaded_count = 0
+    with open(env_path, 'r', encoding='utf-8') as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            if line.startswith('export '):
+                line = line[7:].strip()
+
+            if '=' not in line:
+                continue
+
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip()
+
+            if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+                continue
+
+            if (value.startswith('"') and value.endswith('"')) or (
+                value.startswith("'") and value.endswith("'")
+            ):
+                value = value[1:-1]
+
+            if not override and key in os.environ:
+                continue
+
+            os.environ[key] = value
+            loaded_count += 1
+
+    return loaded_count
+
+
 def resolve_recipient_address(recipient: Dict[str, Any]) -> str:
     '''Map a recipient record to an email-to-SMS gateway address.'''
     phone = _normalize_phone(recipient['phone'])
@@ -220,8 +319,10 @@ def resolve_recipient_address(recipient: Dict[str, Any]) -> str:
     if custom_domain:
         return f'{phone}@{custom_domain}'
 
-    carrier_code = str(recipient.get('carrier_code', '')).strip().lower()
+    carrier_code = _normalize_carrier_code(recipient.get('carrier_code', ''))
     domain = BUILTIN_CARRIER_GATEWAYS.get(carrier_code)
     if not domain:
-        raise ConfigError(f'Unknown carrier_code {carrier_code}; provide custom_gateway_domain.')
+        raise ConfigError(
+            f'Unknown carrier_code {recipient.get("carrier_code", "")}; '
+            f'provide custom_gateway_domain.')
     return f'{phone}@{domain}'

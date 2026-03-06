@@ -14,3 +14,9 @@ venv/
 
 # Local editor settings
 .vscode/
+
+# Local runtime config
+config.yaml
+
+# Local secrets
+.env
