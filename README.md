@@ -19,9 +19,19 @@ Standalone Python service that detects home power loss from a non-UPS IoT sentin
 - `power_detector.py`: CLI entrypoint and service loop
 - `detector/`: core modules (`config`, `models`, `probes`, `state_machine`, `notifier`)
 - `config.example.yaml`: full user-configurable settings template
-- `deploy/systemd/power-detector.service`: Linux service unit
+- `devices.json`: monitored-device registry with `deviceid`, `name`, and `monitoring`
+- `deploy/systemd/power-detector.service`: example Linux service unit
 - `scripts/run_macos_mock.sh`: local mock-mode run helper
+- `scripts/remote_pi_bootstrap.sh`: copy repo to Pi and run first-time bootstrap
+- `scripts/remote_pi_push_config.sh`: copy local `config.yaml`, `devices.json`, and optional `.env` to the Pi
+- `scripts/remote_pi_push_devices.sh`: copy only `devices.json` to the Pi for runtime device switching
+- `scripts/remote_pi_smoke_test.sh`: run the Pi smoke test remotely over SSH
+- `scripts/remote_pi_install_service.sh`: install and restart the Pi `systemd` service remotely
+- `scripts/pi_bootstrap.sh`: on-Pi package install and Python environment bootstrap
+- `scripts/pi_smoke_test.sh`: on-Pi validation helper
+- `scripts/pi_install_service.sh`: on-Pi `systemd` installer
 - `docs/clarifying-questions.md`: ongoing discovery/decision log
+- `docs/pi-deployment-procedure.md`: exact Mac-to-Pi deployment and update sequence
 - `docs/session-transcript.md`: full user/assistant session transcript for historical traceability
 
 ## Quick Start (macOS local)
@@ -41,7 +51,7 @@ Note:
 
 ## Real LAN Test (macOS)
 
-1. Prefer setting `sentinel.device_id` and `discovery.targets` so DHCP IP changes are handled automatically.
+1. Prefer setting `sentinel.devices_file` and `discovery.targets` so DHCP IP changes are handled automatically.
 2. Optional fallback: set `sentinel.host` to a stable hostname (for example `shellyplug-sensor.local`).
 3. Keep `--dry-run-notify` for no-SMTP testing or set SMTP env var for real sends.
 
@@ -129,8 +139,32 @@ python scripts/find_shelly.py --target 192.168.1.0/24
 ```
 
 This helps you capture either:
-- `sentinel.device_id` for DHCP-resilient monitoring (recommended)
+- `devices.json` plus `sentinel.devices_file` for DHCP-resilient monitoring (recommended)
 - or a stable hostname for `sentinel.host`
+
+`devices.json` format:
+
+```json
+{
+  "devices": [
+    {
+      "deviceid": "C45BBE6AD7D9",
+      "name": "main_power_sentinel",
+      "monitoring": true
+    },
+    {
+      "deviceid": "4022D8965492",
+      "name": "alternate_sentinel",
+      "monitoring": false
+    }
+  ]
+}
+```
+
+Runtime behavior:
+- The detector reloads `devices.json` on every monitor loop.
+- Exactly one device should normally have `monitoring: true`.
+- If you switch the `true` flag to a different device and save the file, the next loop will adopt that device without restarting the service.
 
 You can scan wider ranges:
 
@@ -156,21 +190,21 @@ Discovery output includes:
 
 ## Raspberry Pi Deployment
 
-1. Install Raspberry Pi OS Lite and enable SSH.
-2. Configure DHCP reservation + hostname.
-3. Clone repo to target path (for example `/opt/power-detector`).
-4. Create venv and install requirements.
-5. Create `config.yaml` from `config.example.yaml`.
-6. Set `POWER_DETECTOR_SMTP_PASSWORD` in service environment.
-7. Install and enable systemd unit.
+Preferred path: follow [docs/pi-deployment-procedure.md](/Users/johnmacdonald/code/other/power-detector/docs/pi-deployment-procedure.md).
+
+First-time deployment from your Mac:
 
 ```bash
-sudo cp deploy/systemd/power-detector.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable power-detector
-sudo systemctl start power-detector
-sudo systemctl status power-detector
+./scripts/remote_pi_bootstrap.sh --target <pi_user>@stormwatch.local
+./scripts/remote_pi_push_config.sh --target <pi_user>@stormwatch.local
+./scripts/remote_pi_smoke_test.sh --target <pi_user>@stormwatch.local --send-test-notify
+./scripts/remote_pi_install_service.sh --target <pi_user>@stormwatch.local
 ```
+
+Notes:
+- Keep using hostname and DHCP reservation rather than hardcoded static IP.
+- Preferred production config is `devices.json` plus `sentinel.devices_file` and `discovery.targets`.
+- The remote install script generates the final `systemd` unit using the repo path and current remote user.
 
 ## Config Defaults
 
@@ -185,7 +219,7 @@ sudo systemctl status power-detector
 - `notification.startup_message_enabled: true`
 
 Production note:
-- Preferred: configure `sentinel.device_id` + `discovery.targets`.
+- Preferred: configure `sentinel.devices_file` + `devices.json` + `discovery.targets`.
 - Fallback: use hostname in `sentinel.host` instead of raw IP.
 
 ## Tests

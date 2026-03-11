@@ -10,7 +10,8 @@ outage_reminder_interval_seconds: 1800
 sentinel:
   type: shelly_http
   host: ''
-  device_id: 34987a123456
+  device_id: ''
+  devices_file: ./devices.json
   timeout_seconds: 2
 
 discovery:

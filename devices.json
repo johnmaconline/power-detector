@@ -1,0 +1,29 @@
+{
+  "devices": [
+    {
+      "deviceid": "a4cf12f3db50",
+      "name": "Garage Inside Lights",
+      "monitoring": true
+    },
+    {
+      "deviceid": "bcff4dfcee58",
+      "name": "Front Walk Light",
+      "monitoring": true
+    },
+    {
+      "deviceid": "98cdac2f3d1b",
+      "name": "Garage Outside Light",
+      "monitoring": true
+    },
+    {
+      "deviceid": "c45bbe6ad7d9",
+      "name": "Cabinet Lights",
+      "monitoring": true
+    },
+    {
+      "deviceid": "4022D8965492",
+      "name": "Floor Water Leak Sensor",
+      "monitoring": false
+    }
+  ]
+}

@@ -113,13 +113,18 @@ def _make_power_probe(config, args):
         return MockSequenceProbe(sequence)
 
     sentinel_cfg = config['sentinel']
+    host = str(sentinel_cfg.get('host', '')).strip()
     device_id = str(sentinel_cfg.get('device_id', '')).strip()
-    if device_id:
-        log.info(f'Using device_id-based sentinel resolution for id={device_id}.')
+    devices_file = str(sentinel_cfg.get('devices_file', '')).strip()
+    if not host and (device_id or devices_file):
+        if device_id:
+            log.info(f'Using device_id-based sentinel resolution for id={device_id}.')
+        else:
+            log.info(f'Using dynamic device-registry sentinel resolution from {devices_file}.')
         return DeviceIdShellyProbe(config, log)
 
     return ShellyHttpProbe(
-        host=sentinel_cfg['host'],
+        host=host,
         timeout_seconds=sentinel_cfg.get('timeout_seconds', 2),
     )
 
@@ -197,15 +202,18 @@ def _loop(config, args):
     poll_interval = config['poll_interval_seconds']
     startup_sent = False
     startup_enabled = bool(config.get('notification', {}).get('startup_message_enabled', True))
-    sentinel_cfg = config.get('sentinel', {})
-    sentinel_identity = str(sentinel_cfg.get('device_id', '')).strip() or str(
-        sentinel_cfg.get('host', '')).strip()
 
     while True:
         now_ts = time.monotonic()
 
         power_result = power_probe.check()
         wan_result = wan_probe.check()
+        if hasattr(power_probe, 'describe_target'):
+            sentinel_identity = power_probe.describe_target()
+        else:
+            sentinel_cfg = config.get('sentinel', {})
+            sentinel_identity = str(sentinel_cfg.get('device_id', '')).strip() or str(
+                sentinel_cfg.get('host', '')).strip()
 
         log.debug(
             f'Probe power_ok={power_result.ok} reason={power_result.reason} '

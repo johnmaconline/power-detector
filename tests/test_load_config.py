@@ -38,13 +38,17 @@ def test_load_config_missing_required_raises(tmp_path):
 
 
 def test_load_config_device_id_without_host_success(tmp_path):
+    devices_path = tmp_path / 'devices.json'
+    devices_path.write_text(
+        '{"devices":[{"deviceid":"34987A123456","name":"main_power_sentinel","monitoring":true}]}'
+    )
     config_path = tmp_path / 'config.yaml'
     config_path.write_text(
         textwrap.dedent(
             '''
             sentinel:
               host: ""
-              device_id: 34987a123456
+              devices_file: ./devices.json
             discovery:
               targets:
                 - 192.168.1.0/24
@@ -61,18 +65,22 @@ def test_load_config_device_id_without_host_success(tmp_path):
     )
 
     config = load_config(str(config_path))
-    assert config['sentinel']['device_id'] == '34987a123456'
+    assert config['sentinel']['device_id'] == ''
     assert config['sentinel']['host'] == ''
 
 
 def test_load_config_device_id_without_discovery_targets_raises(tmp_path):
+    devices_path = tmp_path / 'devices.json'
+    devices_path.write_text(
+        '{"devices":[{"deviceid":"34987A123456","name":"main_power_sentinel","monitoring":true}]}'
+    )
     config_path = tmp_path / 'config.yaml'
     config_path.write_text(
         textwrap.dedent(
             '''
             sentinel:
               host: ""
-              device_id: 34987a123456
+              devices_file: ./devices.json
             discovery:
               targets: []
             notification:
@@ -89,6 +97,62 @@ def test_load_config_device_id_without_discovery_targets_raises(tmp_path):
 
     with pytest.raises(ConfigError):
         load_config(str(config_path))
+
+
+def test_load_config_invalid_devices_registry_raises(tmp_path):
+    devices_path = tmp_path / 'devices.json'
+    devices_path.write_text(
+        '{"devices":[{"deviceid":"34987A123456","monitoring":true}]}'
+    )
+    config_path = tmp_path / 'config.yaml'
+    config_path.write_text(
+        textwrap.dedent(
+            '''
+            sentinel:
+              host: ""
+              devices_file: ./devices.json
+            discovery:
+              targets:
+                - 192.168.1.0/24
+            notification:
+              transport: ntfy_push
+              ntfy:
+                server_url: https://ntfy.sh
+                topic: demo-topic
+            '''
+        ).strip()
+    )
+
+    with pytest.raises(ConfigError):
+        load_config(str(config_path))
+
+
+def test_load_config_devices_registry_string_monitoring_success(tmp_path):
+    devices_path = tmp_path / 'devices.json'
+    devices_path.write_text(
+        '{"devices":[{"deviceid":"34987A123456","name":"main_power_sentinel","monitoring":"True"}]}'
+    )
+    config_path = tmp_path / 'config.yaml'
+    config_path.write_text(
+        textwrap.dedent(
+            '''
+            sentinel:
+              host: ""
+              devices_file: ./devices.json
+            discovery:
+              targets:
+                - 192.168.1.0/24
+            notification:
+              transport: ntfy_push
+              ntfy:
+                server_url: https://ntfy.sh
+                topic: demo-topic
+            '''
+        ).strip()
+    )
+
+    config = load_config(str(config_path))
+    assert config['sentinel']['devices_file'].endswith('devices.json')
 
 
 def test_load_config_twilio_success(tmp_path):

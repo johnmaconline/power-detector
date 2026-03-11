@@ -70,3 +70,6 @@ This document records discovery questions for the power-loss detector and the cu
 
 21. Q: Event dedupe cooldown default?
     A: `180` seconds.
+
+22. Q: How should known Shelly devices be tracked?
+    A: In a separate JSON registry file, `devices.json`, using device records with `deviceid`, `name`, and `monitoring`. The active sentinel is whichever record has `monitoring: true`, and the file is reloaded dynamically each monitor loop.

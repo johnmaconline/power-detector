@@ -9,6 +9,7 @@
 ##########################################################################################
 
 import copy
+import json
 import os
 import re
 from typing import Any, Dict, List
@@ -29,6 +30,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         'type': 'shelly_http',
         'host': '',
         'device_id': '',
+        'devices_file': './devices.json',
         'timeout_seconds': 2,
     },
     'discovery': {
@@ -122,6 +124,92 @@ _CARRIER_CODE_ALIASES: Dict[str, str] = {
 class ConfigError(Exception):
     '''Raised when configuration is invalid or incomplete.'''
     pass
+
+
+def _normalize_device_id(raw_device_id: Any) -> str:
+    '''Normalize device IDs to a stable uppercase alphanumeric string.'''
+    return re.sub(r'[^a-zA-Z0-9]', '', str(raw_device_id or '')).upper()
+
+
+def _normalize_monitoring_flag(raw_monitoring: Any) -> bool:
+    '''Accept JSON booleans and common string forms for monitoring flags.'''
+    if isinstance(raw_monitoring, bool):
+        return raw_monitoring
+
+    if isinstance(raw_monitoring, str):
+        cleaned = raw_monitoring.strip().lower()
+        if cleaned == 'true':
+            return True
+        if cleaned == 'false':
+            return False
+
+    raise ConfigError(
+        'Device registry monitoring values must be JSON true/false or strings "true"/"false".')
+
+
+def load_device_registry(devices_path: str) -> List[Dict[str, Any]]:
+    '''Load and validate the devices.json registry file.'''
+    if not os.path.exists(devices_path):
+        raise ConfigError(f'Device registry file not found: {devices_path}')
+
+    try:
+        with open(devices_path, 'r', encoding='utf-8') as fh:
+            loaded = json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f'Invalid JSON in device registry {devices_path}: {exc}') from exc
+
+    if not isinstance(loaded, dict):
+        raise ConfigError('Device registry root must be a JSON object.')
+
+    devices = loaded.get('devices')
+    if not isinstance(devices, list):
+        raise ConfigError('Device registry must contain a top-level "devices" array.')
+
+    normalized_devices: List[Dict[str, Any]] = []
+    seen_names = set()
+    seen_ids = set()
+
+    for index, raw_device in enumerate(devices):
+        if not isinstance(raw_device, dict):
+            raise ConfigError(f'Device registry entry devices[{index}] must be an object.')
+
+        name = str(raw_device.get('name', '')).strip()
+        if not name:
+            raise ConfigError(f'Device registry entry devices[{index}].name is required.')
+        if name in seen_names:
+            raise ConfigError(f'Device registry contains duplicate device name: {name}')
+
+        device_id = _normalize_device_id(raw_device.get('deviceid', ''))
+        if not device_id:
+            raise ConfigError(f'Device registry entry devices[{index}].deviceid is required.')
+        if device_id in seen_ids:
+            raise ConfigError(f'Device registry contains duplicate device ID: {device_id}')
+
+        monitoring = _normalize_monitoring_flag(raw_device.get('monitoring', False))
+
+        seen_names.add(name)
+        seen_ids.add(device_id)
+        normalized_devices.append({
+            'name': name,
+            'deviceid': device_id,
+            'monitoring': monitoring,
+        })
+
+    return normalized_devices
+
+
+def _resolve_sentinel_paths(config: Dict[str, Any], config_path: str) -> Dict[str, Any]:
+    '''Resolve sentinel file paths relative to the config file location.'''
+    sentinel = copy.deepcopy(config.get('sentinel', {}))
+    sentinel['device_id'] = _normalize_device_id(sentinel.get('device_id', ''))
+    devices_file = str(sentinel.get('devices_file', './devices.json')).strip()
+    if devices_file and not os.path.isabs(devices_file):
+        sentinel['devices_file'] = os.path.join(
+            os.path.dirname(os.path.abspath(config_path)),
+            devices_file,
+        )
+    config['sentinel'] = sentinel
+    return config
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -228,10 +316,13 @@ def _validate(config: Dict[str, Any]) -> Dict[str, Any]:
     if sentinel.get('type') != 'shelly_http':
         raise ConfigError('sentinel.type must be shelly_http for v1.')
     sentinel_host = str(sentinel.get('host', '')).strip()
-    sentinel_device_id = str(sentinel.get('device_id', '')).strip()
-    if not sentinel_host and not sentinel_device_id:
-        raise ConfigError('sentinel.host or sentinel.device_id is required.')
+    sentinel_device_id = _normalize_device_id(sentinel.get('device_id', ''))
+    sentinel_devices_file = str(sentinel.get('devices_file', '')).strip()
+    if not sentinel_host and not sentinel_device_id and not sentinel_devices_file:
+        raise ConfigError('sentinel.host, sentinel.device_id, or sentinel.devices_file is required.')
     _require_int(sentinel.get('timeout_seconds', 0), 'sentinel.timeout_seconds', 1)
+    if not sentinel_host and sentinel_devices_file:
+        load_device_registry(sentinel_devices_file)
 
     discovery = config.get('discovery', {})
     _require_int(discovery.get('workers', 0), 'discovery.workers', 1)
@@ -242,9 +333,10 @@ def _validate(config: Dict[str, Any]) -> Dict[str, Any]:
     targets = discovery.get('targets', [])
     if not isinstance(targets, list):
         raise ConfigError('discovery.targets must be a list.')
-    if sentinel_device_id and not sentinel_host and len(targets) == 0:
+    if not sentinel_host and (sentinel_device_id or sentinel_devices_file) and len(targets) == 0:
         raise ConfigError(
-            'discovery.targets is required when using sentinel.device_id without sentinel.host.')
+            'discovery.targets is required when using sentinel.device_id or '
+            'sentinel.devices_file without sentinel.host.')
 
     wan_probe = config.get('wan_probe', {})
     if not wan_probe.get('dns_targets') and not wan_probe.get('http_targets'):
@@ -330,6 +422,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
         raise ConfigError('Config root must be a mapping/object.')
 
     merged = _deep_merge(DEFAULT_CONFIG, loaded)
+    merged = _resolve_sentinel_paths(merged, config_path)
     return _validate(merged)
 
 
