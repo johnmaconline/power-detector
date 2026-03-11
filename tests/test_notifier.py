@@ -100,3 +100,28 @@ def test_notify_ntfy_dry_run_success():
     )
 
     assert notifier.notify(event, dry_run=True)
+
+
+def test_compose_message_includes_device_metadata():
+    logger = logging.getLogger('test_compose_message_includes_device_metadata')
+    logger.setLevel(logging.DEBUG)
+
+    config = _config_for_notifier()
+    notifier = Notifier(config, logger)
+
+    event = AlertEvent(
+        kind=EventKind.POWER_LOSS,
+        started_at=0.0,
+        duration_seconds=65,
+        details='test',
+        metadata={
+            'device_name': 'main_power_sentinel',
+            'device_id': 'C45BBE6AD7D9',
+            'device_host': '192.168.1.27',
+        },
+    )
+
+    message = notifier._compose_message(event, 'stormwatch')
+    assert 'device=main_power_sentinel' in message
+    assert 'device_id=C45BBE6AD7D9' in message
+    assert 'device_host=192.168.1.27' in message

@@ -8,7 +8,7 @@ Standalone Python service that detects home power loss from a non-UPS IoT sentin
 - Power loss alert after configurable continuous failure duration (default `60s`)
 - Power restore alert after configurable stability window (default `10s`)
 - Separate WAN loss/restore alerts (defaults `90s`/`20s`)
-- Deduplication cooldown and optional periodic outage reminders
+- Deduplication cooldown and scheduled outage reminder progression
 - Phone + carrier recipient mapping with built-in US carrier domains and custom override
 - Free `ntfy` push notification transport
 - Twilio SMS transport support for reliable direct text delivery
@@ -214,8 +214,10 @@ Notes:
 - `wan_loss_threshold_seconds: 90`
 - `wan_restore_stability_seconds: 20`
 - `event_cooldown_seconds: 180`
-- `outage_cadence_mode: single_recovery`
+- `outage_cadence_mode: scheduled`
 - `outage_reminder_interval_seconds: 1800`
+- `outage_reminder_schedule_minutes: [5, 15, 30, 60, 120, 240, 480, 1440]`
+- `outage_reminder_repeat_after_last_minutes: 1440`
 - `notification.startup_message_enabled: true`
 
 Production note:

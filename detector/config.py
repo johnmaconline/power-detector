@@ -24,8 +24,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'wan_loss_threshold_seconds': 90,
     'wan_restore_stability_seconds': 20,
     'event_cooldown_seconds': 180,
-    'outage_cadence_mode': 'single_recovery',
+    'outage_cadence_mode': 'scheduled',
     'outage_reminder_interval_seconds': 1800,
+    'outage_reminder_schedule_minutes': [5, 15, 30, 60, 120, 240, 480, 1440],
+    'outage_reminder_repeat_after_last_minutes': 1440,
     'sentinel': {
         'type': 'shelly_http',
         'host': '',
@@ -309,8 +311,24 @@ def _validate(config: Dict[str, Any]) -> Dict[str, Any]:
     _require_int(config['event_cooldown_seconds'], 'event_cooldown_seconds', 0)
     _require_int(config['outage_reminder_interval_seconds'], 'outage_reminder_interval_seconds', 60)
 
-    if config['outage_cadence_mode'] not in ('single_recovery', 'periodic'):
-        raise ConfigError('outage_cadence_mode must be single_recovery or periodic.')
+    if config['outage_cadence_mode'] not in ('single_recovery', 'periodic', 'scheduled'):
+        raise ConfigError('outage_cadence_mode must be single_recovery, periodic, or scheduled.')
+
+    schedule = config.get('outage_reminder_schedule_minutes', [])
+    if not isinstance(schedule, list) or len(schedule) == 0:
+        raise ConfigError('outage_reminder_schedule_minutes must be a non-empty list.')
+    previous_minutes = 0
+    for index, minutes in enumerate(schedule):
+        _require_int(minutes, f'outage_reminder_schedule_minutes[{index}]', 1)
+        if minutes <= previous_minutes:
+            raise ConfigError('outage_reminder_schedule_minutes must be strictly increasing.')
+        previous_minutes = minutes
+
+    _require_int(
+        config.get('outage_reminder_repeat_after_last_minutes', 0),
+        'outage_reminder_repeat_after_last_minutes',
+        1,
+    )
 
     sentinel = config.get('sentinel', {})
     if sentinel.get('type') != 'shelly_http':

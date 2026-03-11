@@ -24,6 +24,7 @@ class DetectorStateMachine:
         self.power_alerted: bool = False
         self.power_alert_anchor_at: Optional[float] = None
         self.power_last_reminder_at: Optional[float] = None
+        self.power_reminder_count: int = 0
 
         self.wan_failure_started_at: Optional[float] = None
         self.wan_recovery_started_at: Optional[float] = None
@@ -104,6 +105,7 @@ class DetectorStateMachine:
                     self.power_alerted = False
                     self.power_alert_anchor_at = None
                     self.power_last_reminder_at = None
+                    self.power_reminder_count = 0
                     self.power_recovery_started_at = None
             else:
                 self.power_recovery_started_at = None
@@ -133,6 +135,7 @@ class DetectorStateMachine:
                 self.power_alerted = True
                 self.power_alert_anchor_at = self.power_failure_started_at
                 self.power_last_reminder_at = now_ts
+                self.power_reminder_count = 0
             return events
 
         if self.config['outage_cadence_mode'] == 'periodic':
@@ -155,8 +158,45 @@ class DetectorStateMachine:
                 )
                 self._record_emit(EventKind.POWER_LOSS, now_ts)
                 self.power_last_reminder_at = now_ts
+                self.power_reminder_count += 1
+
+        if self.config['outage_cadence_mode'] == 'scheduled':
+            due = self._power_scheduled_reminder_due(now_ts)
+            if due and self._can_emit(EventKind.POWER_LOSS, now_ts):
+                events.append(
+                    self._new_event(
+                        EventKind.POWER_LOSS,
+                        now_ts,
+                        self.power_alert_anchor_at or self.power_failure_started_at,
+                        'Power outage reminder.',
+                        is_reminder=True,
+                    )
+                )
+                self._record_emit(EventKind.POWER_LOSS, now_ts)
+                self.power_last_reminder_at = now_ts
+                self.power_reminder_count += 1
 
         return events
+
+    def _power_scheduled_reminder_due(self, now_ts: float) -> bool:
+        '''Determine whether the next scheduled outage reminder is due.'''
+        anchor_at = self.power_alert_anchor_at or self.power_failure_started_at
+        if anchor_at is None:
+            return False
+
+        schedule = self.config.get('outage_reminder_schedule_minutes', [])
+        repeat_after_last = self.config.get('outage_reminder_repeat_after_last_minutes', 1440)
+        reminder_index = self.power_reminder_count
+
+        if reminder_index < len(schedule):
+            target_minutes = schedule[reminder_index]
+        else:
+            target_minutes = schedule[-1] + (
+                repeat_after_last * (reminder_index - len(schedule) + 1)
+            )
+
+        elapsed_seconds = now_ts - anchor_at
+        return elapsed_seconds >= (target_minutes * 60)
 
     def _process_wan(self, now_ts: float, wan_ok: bool) -> List[AlertEvent]:
         '''Apply WAN probe signal to WAN state and emit events if needed.'''

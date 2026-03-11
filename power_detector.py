@@ -144,6 +144,24 @@ def _make_wan_probe(config, args):
     )
 
 
+def _power_event_metadata(config, power_probe):
+    '''Build structured sentinel metadata for power-related notifications.'''
+    if hasattr(power_probe, 'get_target_metadata'):
+        metadata = power_probe.get_target_metadata()
+        if metadata:
+            return metadata
+
+    sentinel_cfg = config.get('sentinel', {})
+    metadata = {}
+    host = str(sentinel_cfg.get('host', '')).strip()
+    device_id = str(sentinel_cfg.get('device_id', '')).strip()
+    if host:
+        metadata['device_host'] = host
+    if device_id:
+        metadata['device_id'] = device_id.upper()
+    return metadata
+
+
 def _run_test_notification(config, args):
     '''Send a synthetic test alert and exit with status code.'''
     notifier = Notifier(config, log)
@@ -208,6 +226,7 @@ def _loop(config, args):
 
         power_result = power_probe.check()
         wan_result = wan_probe.check()
+        power_metadata = _power_event_metadata(config, power_probe)
         if hasattr(power_probe, 'describe_target'):
             sentinel_identity = power_probe.describe_target()
         else:
@@ -231,6 +250,7 @@ def _loop(config, args):
                     f'Power detected. Monitoring started for sentinel={sentinel_identity}. '
                     f'probe={power_result.reason}'
                 ),
+                metadata=power_metadata,
             )
             sent = notifier.notify(startup_event, dry_run=args.dry_run_notify)
             if sent:
@@ -245,6 +265,8 @@ def _loop(config, args):
             log.info('No state transition events this cycle.')
         else:
             for event in events:
+                if event.kind in (EventKind.POWER_LOSS, EventKind.POWER_RESTORE):
+                    event.metadata.update(power_metadata)
                 log.info(
                     f'Event kind={event.kind.value} reminder={event.is_reminder} '
                     f'duration={event.duration_seconds}s details={event.details}')

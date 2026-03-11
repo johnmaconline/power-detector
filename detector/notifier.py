@@ -50,12 +50,36 @@ class Notifier:
 
     def _compose_message(self, event: AlertEvent, host_label: str) -> str:
         reminder_suffix = ' REMINDER' if event.is_reminder else ''
-        return (
-            f'[{event.kind.value.upper()}{reminder_suffix}] '
-            f'host={host_label} '
-            f'duration={event.duration_seconds}s '
-            f'details={event.details}'
-        )
+        parts = [
+            f'[{event.kind.value.upper()}{reminder_suffix}]',
+            f'host={host_label}',
+        ]
+
+        device_name = str(event.metadata.get('device_name', '')).strip()
+        device_id = str(event.metadata.get('device_id', '')).strip()
+        device_host = str(event.metadata.get('device_host', '')).strip()
+
+        if device_name:
+            parts.append(f'device={device_name}')
+        if device_id:
+            parts.append(f'device_id={device_id}')
+        if device_host:
+            parts.append(f'device_host={device_host}')
+        monitored_devices = str(event.metadata.get('monitored_devices', '')).strip()
+        up_devices = str(event.metadata.get('up_devices', '')).strip()
+        down_devices = str(event.metadata.get('down_devices', '')).strip()
+        if monitored_devices:
+            parts.append(f'monitored_devices={monitored_devices}')
+        if up_devices:
+            parts.append(f'up_devices={up_devices}')
+        if down_devices:
+            parts.append(f'down_devices={down_devices}')
+
+        parts.extend([
+            f'duration={event.duration_seconds}s',
+            f'details={event.details}',
+        ])
+        return ' '.join(parts)
 
     def _send_email(self, subject: str, body: str, recipients: List[str], dry_run: bool) -> bool:
         smtp_cfg = self.config['notification']['smtp']

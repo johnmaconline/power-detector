@@ -54,7 +54,7 @@ class ShellyHttpProbe:
 
 
 class DeviceIdShellyProbe:
-    '''Probe Shelly by active device ID, discovering current host as needed.'''
+    '''Probe one or more Shelly devices by device ID, discovering hosts as needed.'''
 
     def __init__(self, config: Dict, logger):
         self.config = config
@@ -66,69 +66,105 @@ class DeviceIdShellyProbe:
         self.timeout_seconds = int(self.sentinel_cfg.get('timeout_seconds', 2))
         self.refresh_seconds = int(self.discovery_cfg.get('refresh_seconds', 300))
 
-        self.current_host = str(self.sentinel_cfg.get('host', '')).strip() or None
-        self.last_discovery_at = 0.0
-        self.active_device_id = self.device_id
-        self.active_device_name = ''
+        self.initial_host = str(self.sentinel_cfg.get('host', '')).strip() or None
+        self.monitored_devices: List[Dict[str, str]] = []
+        self.host_by_device_id: Dict[str, Optional[str]] = {}
+        self.last_discovery_at_by_device_id: Dict[str, float] = {}
+        self.last_check_metadata: Dict[str, str] = {}
 
-    def _set_active_device(self, device_id: str, device_name: str) -> None:
-        '''Update active device selection and reset discovery state on changes.'''
-        normalized_device_id = _normalize_device_id(device_id)
-        normalized_device_name = str(device_name).strip()
+    def _device_label(self, device: Dict[str, str]) -> str:
+        '''Return a readable label for one monitored device.'''
+        name = str(device.get('name', '')).strip()
+        device_id = _normalize_device_id(device.get('deviceid', '')).upper()
+        if name and device_id:
+            return f'{name} ({device_id})'
+        if name:
+            return name
+        return device_id or 'unknown-device'
 
-        changed = (
-            normalized_device_id != self.active_device_id or
-            normalized_device_name != self.active_device_name
-        )
-        if changed:
-            self.current_host = None
-            self.last_discovery_at = 0.0
-            self.log.info(
-                f'Active sentinel changed to name={normalized_device_name} '
-                f'device_id={normalized_device_id}.')
-
-        self.active_device_id = normalized_device_id
-        self.active_device_name = normalized_device_name
-
-    def _refresh_active_device(self) -> bool:
-        '''Reload active monitored device from config or devices.json.'''
+    def _refresh_monitored_devices(self) -> bool:
+        '''Reload monitored devices from config or devices.json.'''
         if self.device_id:
-            self._set_active_device(self.device_id, self.active_device_name or self.device_id)
-            return True
+            new_devices = [{
+                'deviceid': self.device_id,
+                'name': self.device_id.upper(),
+            }]
+        elif self.devices_file:
+            try:
+                devices = load_device_registry(self.devices_file)
+            except ConfigError as exc:
+                self.log.error(f'Device registry error: {exc}')
+                return len(self.monitored_devices) > 0
 
-        if not self.devices_file:
-            return bool(self.active_device_id)
+            new_devices = [
+                {
+                    'deviceid': _normalize_device_id(device['deviceid']),
+                    'name': str(device['name']).strip(),
+                }
+                for device in devices
+                if device['monitoring']
+            ]
+            if len(new_devices) == 0:
+                self.log.error('Device registry must have at least one monitored device.')
+                return len(self.monitored_devices) > 0
+        else:
+            new_devices = []
 
-        try:
-            devices = load_device_registry(self.devices_file)
-        except ConfigError as exc:
-            self.log.error(f'Device registry error: {exc}')
-            return bool(self.active_device_id)
+        new_ids = {device['deviceid'] for device in new_devices}
+        old_ids = {device['deviceid'] for device in self.monitored_devices}
+        if new_ids != old_ids:
+            self.log.info(
+                'Monitored sentinel set updated: '
+                + ', '.join(self._device_label(device) for device in new_devices)
+            )
 
-        monitored = [device for device in devices if device['monitoring']]
-        if len(monitored) != 1:
-            self.log.error(
-                f'Device registry must have exactly one monitored device; found {len(monitored)}.')
-            return bool(self.active_device_id)
+        self.monitored_devices = new_devices
+        for stale_id in list(self.host_by_device_id):
+            if stale_id not in new_ids:
+                del self.host_by_device_id[stale_id]
+        for stale_id in list(self.last_discovery_at_by_device_id):
+            if stale_id not in new_ids:
+                del self.last_discovery_at_by_device_id[stale_id]
 
-        active_device = monitored[0]
-        self._set_active_device(active_device['deviceid'], active_device['name'])
-        return True
+        if self.initial_host and len(self.monitored_devices) == 1:
+            device_id = self.monitored_devices[0]['deviceid']
+            if not self.host_by_device_id.get(device_id):
+                self.host_by_device_id[device_id] = self.initial_host
+
+        return len(self.monitored_devices) > 0
 
     def describe_target(self) -> str:
-        '''Return a human-readable description of the active sentinel target.'''
-        if self.active_device_name and self.active_device_id:
-            return f'{self.active_device_name} ({self.active_device_id.upper()})'
-        if self.active_device_id:
-            return self.active_device_id.upper()
-        if self.current_host:
-            return self.current_host
+        '''Return a human-readable description of the monitored sentinel set.'''
+        if len(self.monitored_devices) == 1:
+            return self._device_label(self.monitored_devices[0])
+        if len(self.monitored_devices) > 1:
+            names = ', '.join(
+                str(device.get('name', '')).strip() or _normalize_device_id(device.get('deviceid', '')).upper()
+                for device in self.monitored_devices
+            )
+            return f'{len(self.monitored_devices)} monitored devices: {names}'
         return 'unresolved sentinel'
 
-    def _discover(self, force: bool = False) -> bool:
-        '''Discover host IP by sentinel device ID and update current host.'''
+    def get_target_metadata(self) -> Dict[str, str]:
+        '''Return structured metadata for the currently monitored sentinel set.'''
+        metadata = dict(self.last_check_metadata)
+        if len(self.monitored_devices) == 1:
+            device = self.monitored_devices[0]
+            metadata.setdefault('device_name', str(device.get('name', '')).strip())
+            metadata.setdefault('device_id', _normalize_device_id(device.get('deviceid', '')).upper())
+            metadata.setdefault(
+                'device_host',
+                str(self.host_by_device_id.get(device['deviceid']) or '').strip(),
+            )
+        return metadata
+
+    def _discover_device_host(self, device: Dict[str, str], force: bool = False) -> bool:
+        '''Discover host IP for one monitored device.'''
+        device_id = device['deviceid']
         now_ts = time.monotonic()
-        if not force and self.current_host and (now_ts - self.last_discovery_at) < self.refresh_seconds:
+        current_host = self.host_by_device_id.get(device_id)
+        last_discovery_at = self.last_discovery_at_by_device_id.get(device_id, 0.0)
+        if not force and current_host and (now_ts - last_discovery_at) < self.refresh_seconds:
             return True
 
         targets = self.discovery_cfg.get('targets', [])
@@ -136,74 +172,113 @@ class DeviceIdShellyProbe:
         http_timeout = float(self.discovery_cfg.get('http_timeout_seconds', 0.6))
         max_hosts = int(self.discovery_cfg.get('max_hosts', 65536))
 
-        if not self.active_device_id:
-            return bool(self.current_host)
-
         try:
             resolved_host = discover_shelly_host_by_device_id(
                 target_specs=targets,
-                device_id=self.active_device_id,
+                device_id=device_id,
                 http_timeout=http_timeout,
                 workers=workers,
                 max_hosts=max_hosts,
             )
         except ValueError as exc:
             self.log.error(f'Discovery configuration error: {exc}')
-            self.last_discovery_at = now_ts
-            return bool(self.current_host)
+            self.last_discovery_at_by_device_id[device_id] = now_ts
+            return bool(current_host)
 
-        self.last_discovery_at = now_ts
+        self.last_discovery_at_by_device_id[device_id] = now_ts
 
         if resolved_host:
-            if self.current_host != resolved_host:
+            if current_host != resolved_host:
                 self.log.info(
-                    f'Resolved Shelly {self.describe_target()} to host={resolved_host}.')
-            self.current_host = resolved_host
+                    f'Resolved Shelly {self._device_label(device)} to host={resolved_host}.')
+            self.host_by_device_id[device_id] = resolved_host
             return True
 
-        self.log.error(f'Could not resolve Shelly host for {self.describe_target()}.')
-        return bool(self.current_host)
+        self.log.error(f'Could not resolve Shelly host for {self._device_label(device)}.')
+        return bool(current_host)
 
-    def _decorate_result(self, result: ProbeResult) -> ProbeResult:
-        '''Attach active target identity to probe reason strings.'''
-        return ProbeResult(
-            ok=result.ok,
-            reason=f'{self.describe_target()}: {result.reason}',
-            latency_ms=result.latency_ms,
-            observed_at=result.observed_at,
-        )
+    def _probe_device(self, device: Dict[str, str]) -> Tuple[bool, str, int]:
+        '''Probe one monitored Shelly device and return ok/reason/latency.'''
+        device_id = device['deviceid']
+        current_host = self.host_by_device_id.get(device_id)
+
+        if not current_host:
+            self._discover_device_host(device, force=True)
+            current_host = self.host_by_device_id.get(device_id)
+
+        if not current_host:
+            return False, f'{self._device_label(device)} unresolved', 0
+
+        probe = ShellyHttpProbe(current_host, timeout_seconds=self.timeout_seconds)
+        result = probe.check()
+        if result.ok:
+            return True, f'{self._device_label(device)} via {current_host}', result.latency_ms
+
+        self._discover_device_host(device, force=True)
+        current_host = self.host_by_device_id.get(device_id)
+        if not current_host:
+            return False, f'{self._device_label(device)} unreachable', result.latency_ms
+
+        retry_probe = ShellyHttpProbe(current_host, timeout_seconds=self.timeout_seconds)
+        retry_result = retry_probe.check()
+        if retry_result.ok:
+            return True, f'{self._device_label(device)} via {current_host}', retry_result.latency_ms
+
+        return False, f'{self._device_label(device)} down', retry_result.latency_ms
 
     def check(self) -> ProbeResult:
-        '''Probe with current host and re-discover if needed on failures.'''
-        self._refresh_active_device()
+        '''Probe all monitored Shelly devices and aggregate their health.'''
+        if not self._refresh_monitored_devices():
+            return ProbeResult(False, 'No monitored sentinel devices configured', 0, time.monotonic())
 
-        if not self.current_host:
-            self._discover(force=True)
+        up_labels: List[str] = []
+        down_labels: List[str] = []
+        latency_ms = 0
 
-        if not self.current_host:
-            return ProbeResult(
-                False,
-                f'No host resolved for {self.describe_target()}',
-                0,
-                time.monotonic(),
+        for device in self.monitored_devices:
+            ok, reason, device_latency_ms = self._probe_device(device)
+            latency_ms = max(latency_ms, device_latency_ms)
+            if ok:
+                up_labels.append(reason)
+            else:
+                down_labels.append(reason)
+
+        monitored_names = [
+            str(device.get('name', '')).strip() or _normalize_device_id(device.get('deviceid', '')).upper()
+            for device in self.monitored_devices
+        ]
+        self.last_check_metadata = {
+            'monitored_devices': ', '.join(monitored_names),
+            'up_devices': ', '.join(up_labels),
+            'down_devices': ', '.join(down_labels),
+            'monitored_device_count': str(len(self.monitored_devices)),
+            'up_device_count': str(len(up_labels)),
+            'down_device_count': str(len(down_labels)),
+        }
+
+        if len(self.monitored_devices) == 1:
+            device = self.monitored_devices[0]
+            self.last_check_metadata['device_name'] = monitored_names[0]
+            self.last_check_metadata['device_id'] = _normalize_device_id(device.get('deviceid', '')).upper()
+            device_host = str(self.host_by_device_id.get(device['deviceid']) or '').strip()
+            if device_host:
+                self.last_check_metadata['device_host'] = device_host
+
+        ok = len(down_labels) == 0
+        if ok:
+            reason = (
+                f'All {len(up_labels)}/{len(self.monitored_devices)} monitored devices reachable; '
+                f'up={self.last_check_metadata["up_devices"]}'
             )
+        else:
+            reason = (
+                f'{len(down_labels)}/{len(self.monitored_devices)} monitored devices unreachable; '
+                f'down={self.last_check_metadata["down_devices"]}'
+            )
+            if up_labels:
+                reason += f'; still_up={self.last_check_metadata["up_devices"]}'
 
-        probe = ShellyHttpProbe(self.current_host, timeout_seconds=self.timeout_seconds)
-        result = self._decorate_result(probe.check())
-        if result.ok:
-            return result
-
-        # Probe failed; force discovery to handle DHCP changes and retry once.
-        self._discover(force=True)
-        if not self.current_host:
-            return result
-
-        retry_probe = ShellyHttpProbe(self.current_host, timeout_seconds=self.timeout_seconds)
-        retry_result = self._decorate_result(retry_probe.check())
-        if retry_result.ok:
-            return retry_result
-
-        return retry_result
+        return ProbeResult(ok, reason, latency_ms, time.monotonic())
 
 
 class WanProbe:

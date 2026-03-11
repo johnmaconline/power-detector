@@ -4,8 +4,10 @@ power_restore_stability_seconds: 10
 wan_loss_threshold_seconds: 90
 wan_restore_stability_seconds: 20
 event_cooldown_seconds: 180
-outage_cadence_mode: single_recovery
+outage_cadence_mode: scheduled
 outage_reminder_interval_seconds: 1800
+outage_reminder_schedule_minutes: [5, 15, 30, 60, 120, 240, 480, 1440]
+outage_reminder_repeat_after_last_minutes: 1440
 
 sentinel:
   type: shelly_http
