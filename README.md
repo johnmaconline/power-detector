@@ -33,6 +33,7 @@ Standalone Python service that detects home power loss from a non-UPS IoT sentin
 - `docs/clarifying-questions.md`: ongoing discovery/decision log
 - `docs/pi-deployment-procedure.md`: exact Mac-to-Pi deployment and update sequence
 - `docs/session-transcript.md`: full user/assistant session transcript for historical traceability
+- `docs/network-api-inventory.md`: discovered LAN devices and exposed API surfaces
 
 ## Quick Start (macOS local)
 
@@ -163,8 +164,8 @@ This helps you capture either:
 
 Runtime behavior:
 - The detector reloads `devices.json` on every monitor loop.
-- Exactly one device should normally have `monitoring: true`.
-- If you switch the `true` flag to a different device and save the file, the next loop will adopt that device without restarting the service.
+- Every device with `monitoring: true` is included in the active probe set.
+- If you change the `monitoring` flags and save the file, the next loop adopts the new set without restarting the service.
 
 You can scan wider ranges:
 
